@@ -235,3 +235,22 @@ Load the extension → Run extension host.
 # 👥 **CONTRIBUTORS**
 - **MEMBER 1:** VS Code Extension + Backend  
 - **MEMBER 2:** ML Model + Dashboard  
+
+
+
+
+## 📘 What I Learned Today
+
+- Understood the complete concept of the **Cognitive Pattern Decoder** project and how it analyzes coding behavior instead of code quality.  
+- Learned the **full system architecture**: VS Code Extension → Backend → ML Model → MongoDB → Dashboard.  
+- Understood the **project flow**: real-time behavior capture → preprocessing → ML classification → visualization.  
+- Learned what metrics are collected: typing speed, backspaces, idle time, file switches, save/compile events.  
+- Learned how these metrics become **ML features** like typing speed, error rate, idle ratio, stability index, and burst typing score.  
+- Learned what an **SRS (Software Requirements Specification)** is and how to write it.  
+- Learned how to write a clean and professional **README.md** with headings, sections, and formatting.  
+- Understood whether a dataset is needed (real-time data is enough; no external dataset required).  
+- Learned the **complete step-by-step implementation plan** for building the project from zero to completion.  
+- Understood the **difficulty level** and why this project is strong for a final-year submission.  
+- Learned key **viva explanations** for architecture, data flow, ML model, and implementation.
+
+This summarizes the core learning and progress made today.
