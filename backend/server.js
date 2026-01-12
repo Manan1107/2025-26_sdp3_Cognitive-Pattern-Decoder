@@ -1,54 +1,31 @@
-// 
-
-
-
-//------------------------------------------->>>>>>>>>>>>>>>>>
-// const express = require("express");
-// const connectDB = require("./config/db");
-
-// const app = express();
-// connectDB();
-
-// app.use(express.json());
-
-// app.use("/api/sessions", require("./routes/session.routes"));
-
-// const PORT = 5000;
-// app.listen(PORT, () =>
-//   console.log(`🚀 Server running on port ${PORT}`)
-// );
-////_------------------------------------------>>>>>>>>>>>>>>>>>>>>
+require("dotenv").config();
 const express = require("express");
 const connectDB = require("./config/db");
 
-// Import routes
 const authRoutes = require("./routes/auth.routes");
-const projectRoutes = require("./routes/project.routes");
 const sessionRoutes = require("./routes/session.routes");
+const projectRoutes = require("./routes/project.routes");
 const mlResultRoutes = require("./routes/mlresult.routes");
 
 const app = express();
 
-// 1️⃣ Connect to MongoDB
+// DB
 connectDB();
 
-// 2️⃣ Built-in middleware to parse JSON
+// Middleware
 app.use(express.json());
 
-// 3️⃣ Register routes
-app.use("/api/auth", authRoutes);         // Register / Login
-app.use("/api/projects", projectRoutes);  // Project (task) APIs
-app.use("/api/sessions", sessionRoutes);  // Session data (DATASET)
-app.use("/api/mlresults", mlResultRoutes);// ML output
+// Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/sessions", sessionRoutes);
+app.use("/api/projects", projectRoutes);
+app.use("/api/mlresults", mlResultRoutes);
 
-// 4️⃣ Health check route (optional but useful)
 app.get("/", (req, res) => {
-  res.send("Cognitive Coding Decoder Backend is running");
+  res.send("Cognitive Pattern Decoder Backend Running");
 });
 
-
-// 5️⃣ Start server
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

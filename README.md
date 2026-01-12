@@ -1,8 +1,6 @@
 # 🧠 **COGNITIVE PATTERN DECODER**  
 ## *AI-BASED CODING BEHAVIOR ANALYSIS SYSTEM*
 
----
-
 # 📌 **OVERVIEW**
 The **COGNITIVE PATTERN DECODER** is an **AI-powered system** that analyzes a programmer’s **CODING BEHAVIOR**, not code quality.  
 A custom **VS CODE EXTENSION** tracks developer behavior like typing rhythm, error patterns, switching habits, and thinking time.
