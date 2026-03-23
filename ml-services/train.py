@@ -1,15 +1,29 @@
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from joblib import dump
+import joblib
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from fetch_data import fetch_sessions_data
+from preprocess import preprocess_data
 
-data = pd.read_csv("coding_data.csv")
+print("Fetching data...")
+df = fetch_sessions_data()
 
-X = data.drop("label", axis=1)
-y = data["label"]
+if df.empty:
+    print("No data found.")
+    exit()
 
-model = RandomForestClassifier()
-model.fit(X, y)
+print("Preprocessing...")
+X = preprocess_data(df)
 
-dump(model, "model.joblib")
-print("Model trained")
+# 🔹 Normalize data
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
+print("Training KMeans...")
+model = KMeans(n_clusters=3, random_state=42)
+model.fit(X_scaled)
+
+# Save both model and scaler
+joblib.dump(model, "model.pkl")
+joblib.dump(scaler, "scaler.pkl")
+
+print("Model and scaler saved!")
