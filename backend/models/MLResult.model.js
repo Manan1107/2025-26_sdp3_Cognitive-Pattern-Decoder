@@ -44,6 +44,19 @@ const MLResultSchema = new mongoose.Schema(
     clusterMeaning: {
       type: String,
       default: null
+    },
+
+    // Mood detected by AI after session analysis
+    mood: {
+      type: String,
+      enum: ["Flow", "Frustrated", "Exploring", "Energetic", "Tired", null],
+      default: null
+    },
+
+    // AI-generated personalized narrative for this session
+    aiNarrative: {
+      type: String,
+      default: null
     }
   },
   {

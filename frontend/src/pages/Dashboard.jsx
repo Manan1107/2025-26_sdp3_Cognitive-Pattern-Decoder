@@ -4,8 +4,11 @@ import { AuthContext } from "../context/AuthContext";
 import {
   Zap, Target, Clipboard, Clock, Delete, PauseCircle,
   FolderOpen, Save, BarChart2, RefreshCw, TrendingUp, Type,
-  MousePointer2, TerminalSquare, Bug
+  MousePointer2, TerminalSquare, Bug, Bot, CheckSquare
 } from "lucide-react";
+import StreakBadge from "../components/StreakBadge";
+import MoodCard from "../components/MoodCard";
+import DailyChallenge from "../components/DailyChallenge";
 import {
   Chart as ChartJS,
   CategoryScale, LinearScale, PointElement, LineElement,
@@ -70,11 +73,28 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [projectTypes, setProjectTypes] = useState([]);
+  const [selectedType, setSelectedType] = useState("");
+
+  const fetchProjectTypes = async () => {
+    if (!user?._id && !user?.userId && !user?.id) return;
+    try {
+      const res = await axios.get(`/projects/user/${user._id || user.userId || user.id}`);
+      // Extract unique project types from all projects
+      const types = [...new Set(res.data.map(p => (p.type || "web").toLowerCase()))];
+      setProjectTypes(types);
+    } catch (err) {
+      console.error("Projects fetch error:", err);
+    }
+  };
 
   const fetchData = async () => {
     try {
       setRefreshing(true);
-      const res = await axios.get("/sessions/dashboard");
+      const url = selectedType 
+        ? `/sessions/dashboard?projectType=${selectedType}` 
+        : "/sessions/dashboard";
+      const res = await axios.get(url);
       setStats(res.data);
     } catch (err) {
       console.error("Dashboard fetch error:", err);
@@ -84,8 +104,13 @@ export default function Dashboard() {
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
-  console.log("Dashboard stats:", stats); // Debug log for stats data
+  useEffect(() => {
+    fetchProjectTypes();
+  }, [user]);
+
+  useEffect(() => {
+    fetchData();
+  }, [selectedType]);
 
   const metrics = stats
     ? [
@@ -102,6 +127,9 @@ export default function Dashboard() {
       { icon: TerminalSquare, label: "Terminal Opens", value: stats.terminalOpenCount ?? 0, color: "#14b8a6" },
       { icon: Bug, label: "Debug Runs", value: stats.debugRunCount ?? 0, color: "#d946ef" },
       { icon: BarChart2, label: "Total Sessions", value: stats.totalSessions ?? 0, color: "#f97316" },
+      // Suggestion Tracker metrics (clamped [0,100], null if no data)
+      { icon: Bot, label: "AI Dependency", value: stats.aiDependencyScore != null ? `${stats.aiDependencyScore}%` : "—", color: "#818cf8", sub: "Suggestions" },
+      { icon: CheckSquare, label: "Suggestion Accuracy", value: stats.suggestionAccuracy != null ? `${stats.suggestionAccuracy}%` : "—", color: "#34d399", sub: "Quality" },
     ]
     : [];
 
@@ -208,14 +236,38 @@ export default function Dashboard() {
             {user?.name ? ` · ${user.name}` : ""}
           </p>
         </div>
-        <button
-          onClick={fetchData}
-          disabled={refreshing}
-          className="btn-ghost flex items-center gap-2 text-sm"
-        >
-          <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-4">
+          <select
+            className="input-field max-w-[200px]"
+            value={selectedType}
+            onChange={(e) => setSelectedType(e.target.value)}
+          >
+            <option value="">All Projects</option>
+            {projectTypes.map((type) => (
+              <option key={type} value={type}>
+                {type.toUpperCase()}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={fetchData}
+            disabled={refreshing}
+            className="btn-ghost flex items-center gap-2 text-sm"
+          >
+            <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* ── AI Insight Row: Streak | Mood | Daily Challenge ── */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <StreakBadge />
+        <MoodCard
+          mood={stats?.mood}
+          description={stats?.sessionNarrative}
+        />
+        <DailyChallenge />
       </div>
 
       {/* Metric cards */}

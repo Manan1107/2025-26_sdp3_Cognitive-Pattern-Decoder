@@ -29,7 +29,14 @@ const SessionSchema = new mongoose.Schema(
     terminalOpenCount: { type: Number, default: 0 },
 
     cluster: { type: Number, default: null },
-    clusterMeaning: { type: String, default: null }
+    clusterMeaning: { type: String, default: null },
+
+    // VS Code Suggestion Tracker (Step 2)
+    // Number of inline completions the user accepted (Tab/Enter)
+    suggestionsAccepted: { type: Number, default: 0 },
+    // Times the user edited code within 1.5s of accepting a suggestion
+    // (indicates the suggestion wasn't quite right)
+    postAcceptEdits: { type: Number, default: 0 }
   },
   {
     timestamps: true

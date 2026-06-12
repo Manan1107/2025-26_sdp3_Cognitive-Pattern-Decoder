@@ -12,6 +12,7 @@ import {
   Bell,
   Users,
   Download,
+  Info,
 } from "lucide-react";
 import NotificationCenter from "./NotificationCenter";
 
@@ -21,6 +22,7 @@ const navLinks = [
   { to: "/history", label: "History", icon: History },
   { to: "/compare", label: "Peer Compare", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/about", label: "About & Guide", icon: Info },
 ];
 
 export default function Sidebar() {
@@ -100,7 +102,7 @@ export default function Sidebar() {
       {/* Bottom actions */}
       <div className="px-2 pb-4 space-y-0.5 border-t border-cardBorder pt-3">
         <a
-          href="/cognitive-decoder-0.0.8.vsix"
+          href="/cognitive-decoder-0.0.12.vsix"
           download
           className={`nav-item w-full text-accent hover:bg-accent/10 hover:text-accent mb-2 ${collapsed ? "justify-center px-2" : ""}`}
           title={collapsed ? "Download Extension" : undefined}

@@ -100,6 +100,26 @@ let debugRunCount = 0;
 let terminalOpenCount = 0;
 let totalPauseTime = 0;
 let pauseCount = 0;
+/*
+  Suggestion tracking — works with any AI completion model
+  (GitHub Copilot, Tabnine, Codeium, IntelliSense, etc.)
+
+  Strategy (no provider-specific API needed):
+  1. When user stops typing for >= 800ms (suggestion may be showing)
+  2. Then a text block is inserted as a single atomic change
+     (any size >= 3 chars — covers single-word to multi-line suggestions)
+  3. If the insert happens within 3000ms of the pause ending
+     → We classify this as an accepted AI suggestion
+  4. If user makes an edit within 1500ms of that insert
+     → We classify this as a post-accept edit (suggestion wasn't perfect)
+*/
+let suggestionsAccepted = 0;
+let postAcceptEdits = 0;
+let lastPauseEndTime = 0; // When the user resumed typing after a pause
+let lastInsertTime = 0; // When the last suggestion-like insert happened
+const PAUSE_THRESHOLD_MS = 800; // Min pause to consider suggestion might be showing
+const ACCEPT_WINDOW_MS = 3000; // Max time after pause for insert to count as accept
+const POST_EDIT_WINDOW_MS = 1500; // Max time after accept for edit to count as post-edit
 /* =====================
    ACTIVATE
 ===================== */
@@ -154,15 +174,66 @@ function activate(context) {
        SELECT PROJECT
     ===================== */
     const selectProjectCommand = vscode.commands.registerCommand("cognitiveDecoder.selectProject", async () => {
-        const projectId = await vscode.window.showInputBox({
-            prompt: "Enter Project ID"
-        });
-        if (!projectId) {
-            vscode.window.showErrorMessage("Project ID is required");
+        if (!authToken) {
+            vscode.window.showErrorMessage("You must be logged in to select a project.");
             return;
         }
-        currentProjectId = projectId;
-        vscode.window.showInformationMessage(`Project selected: ${projectId}`);
+        const userId = getUserIdFromToken(authToken);
+        if (!userId)
+            return;
+        try {
+            const response = await fetch(`${BASE_URL}/api/projects/user/${userId}`, {
+                headers: { "Authorization": `Bearer ${authToken}` }
+            });
+            if (!response.ok) {
+                vscode.window.showErrorMessage("Failed to fetch projects");
+                return;
+            }
+            const projects = await response.json();
+            const quickPickItems = projects.map((p) => ({
+                label: p.name,
+                description: p.type || "web",
+                detail: p._id // Store ID here
+            }));
+            // Add create new option
+            quickPickItems.unshift({
+                label: "➕ Create New Project",
+                description: "Start tracking a brand new codebase",
+                detail: "CREATE_NEW"
+            });
+            const selected = await vscode.window.showQuickPick(quickPickItems, {
+                placeHolder: "Select a project to log your session against"
+            });
+            if (!selected)
+                return;
+            if (selected.detail === "CREATE_NEW") {
+                const newName = await vscode.window.showInputBox({ prompt: "Enter new project name" });
+                if (!newName)
+                    return;
+                const createRes = await fetch(`${BASE_URL}/api/projects`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ name: newName, type: "web" })
+                });
+                if (!createRes.ok) {
+                    vscode.window.showErrorMessage("Failed to create project");
+                    return;
+                }
+                const createdData = await createRes.json();
+                currentProjectId = createdData.project._id;
+                vscode.window.showInformationMessage(`Project created & selected: ${newName}`);
+            }
+            else {
+                currentProjectId = selected.detail || null;
+                vscode.window.showInformationMessage(`Project selected: ${selected.label}`);
+            }
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Error: ${error.message}`);
+        }
     });
     context.subscriptions.push(selectProjectCommand);
     /* =====================
@@ -175,17 +246,46 @@ function activate(context) {
             totalPauseTime += pause;
             pauseCount++;
         }
+        // Track when a meaningful pause ends (suggestion might have been showing)
+        const pauseMs = now - lastEditTime;
+        if (pauseMs >= PAUSE_THRESHOLD_MS) {
+            lastPauseEndTime = now;
+        }
         lastEditTime = now;
         for (const change of event.contentChanges) {
             if (change.text === "") {
+                // Deletion / backspace
                 backspaceCount += Math.abs(change.rangeLength);
+                // If deletion happens shortly after an accepted suggestion → post-edit
+                if (lastInsertTime > 0 && (now - lastInsertTime) < POST_EDIT_WINDOW_MS) {
+                    postAcceptEdits++;
+                    lastInsertTime = 0; // Reset to avoid counting the same accept twice
+                }
             }
-            else if (change.text.length > 50) {
+            else if (change.text.length > 300) {
+                // Large block: treat as paste (not a suggestion)
                 pasteCount++;
                 pasteCharacters += change.text.length;
             }
+            else if (change.text.length >= 3 && lastPauseEndTime > 0 &&
+                (now - lastPauseEndTime) < ACCEPT_WINDOW_MS) {
+                // ── Suggestion Accept Detection ──────────────────
+                // A meaningful insert (>= 3 chars) arrived shortly after a typing pause.
+                // This pattern matches accepting any inline completion (Copilot, Tabnine, etc.)
+                // We NEVER change this threshold after setting it — user requested stability.
+                suggestionsAccepted++;
+                lastInsertTime = now;
+                lastPauseEndTime = 0; // Reset so we don't double-count
+                typedChars += change.text.length; // Still count chars for WPM
+            }
             else {
+                // Regular typing
                 typedChars += change.text.length;
+                // If user types immediately after accepting a suggestion → that's a post-edit
+                if (lastInsertTime > 0 && (now - lastInsertTime) < POST_EDIT_WINDOW_MS) {
+                    postAcceptEdits++;
+                    lastInsertTime = 0;
+                }
             }
         }
     }));
@@ -251,7 +351,10 @@ function activate(context) {
             debugRunCount,
             terminalOpenCount,
             avgPauseTime: Number(avgPause.toFixed(2)),
-            sessionTime
+            sessionTime,
+            // Suggestion tracking data
+            suggestionsAccepted,
+            postAcceptEdits,
         };
         const sendSessionData = async (token) => {
             return await fetch(BASE_URL + "/api/sessions", {
@@ -325,6 +428,11 @@ function activate(context) {
         totalPauseTime = 0;
         pauseCount = 0;
         currentProjectId = null;
+        // Reset suggestion tracker
+        suggestionsAccepted = 0;
+        postAcceptEdits = 0;
+        lastPauseEndTime = 0;
+        lastInsertTime = 0;
     });
     context.subscriptions.push(endSessionCommand);
 }

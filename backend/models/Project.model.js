@@ -10,8 +10,7 @@ const ProjectSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["DSA", "WEB", "ML", "DEBUG","mobile","dsa","defult","web","ml","debug","mobile"],
-      required: true
+      default: "web"
     },
 
     userId: {

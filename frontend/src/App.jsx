@@ -13,6 +13,8 @@ import Layout from "./components/layout/Layout";
 import SessionAnalysis from "./pages/SessionAnalysis";
 import CompareUser from "./pages/CompareUser";
 import Notifications from "./pages/Notifications";
+import About from "./pages/About";
+import ChatBot from "./components/ChatBot";
 
 function App() {
   const { user } = useContext(AuthContext);
@@ -48,6 +50,8 @@ function App() {
   return (
     <BrowserRouter>
       <Toaster position="top-right" />
+      {/* AI Chatbot — visible on all pages when logged in */}
+      {user && <ChatBot />}
       <Routes>
         <Route
           path="/login"
@@ -66,6 +70,7 @@ function App() {
             <Route path="analysis" element={<SessionAnalysis />} />
             <Route path="compare" element={<CompareUser />} />
             <Route path="notifications" element={<Notifications />} />
+            <Route path="about" element={<About />} />
           </Route>
         )}
 
@@ -79,35 +84,3 @@ function App() {
 }
 
 export default App;
-// import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-// import { useContext } from "react";
-// import { AuthContext } from "./context/AuthContext";
-
-// import Login from "./pages/Login";
-// import Register from "./pages/Register";
-// import Dashboard from "./pages/Dashboard";
-
-// function App() {
-//   const { user } = useContext(AuthContext);
-
-//   return (
-//     <BrowserRouter>
-//       <Routes>
-//         <Route
-//           path="/"
-//           element={user ? <Dashboard /> : <Navigate to="/login" />}
-//         />
-//         <Route
-//           path="/login"
-//           element={!user ? <Login /> : <Navigate to="/" />}
-//         />
-//         <Route
-//           path="/register"
-//           element={!user ? <Register /> : <Navigate to="/" />}
-//         />
-//       </Routes>
-//     </BrowserRouter>
-//   );
-// }
-
-// export default App;

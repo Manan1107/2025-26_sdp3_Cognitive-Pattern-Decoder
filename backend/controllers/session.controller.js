@@ -3,6 +3,8 @@ const Session = require("../models/Session.model");
 const MLResult = require("../models/MLResult.model");
 const Project = require("../models/Project.model");
 const axios = require("axios");
+const { generateMoodAnalysis, generateSessionNarrative } = require("../services/ai.service");
+const { updateStreak } = require("../services/streak.service");
 
 // ======================================
 // SHARED CLUSTER MAP (Single Source of Truth)
@@ -82,7 +84,10 @@ exports.createSession = async (req, res) => {
       debugRunCount,
       terminalOpenCount,
       avgPauseTime,
-      sessionTime
+      sessionTime,
+      // Suggestion tracker fields (sent from VS Code extension)
+      suggestionsAccepted: Number(req.body.suggestionsAccepted ?? 0),
+      postAcceptEdits: Number(req.body.postAcceptEdits ?? 0),
     });
 
     res.status(201).json({
@@ -119,13 +124,72 @@ exports.endSession = async (req, res) => {
 
     const cluster = mlResponse.data.cluster;
 
+    // ── Accuracy for mood detection ─────────────────────
+    const moodAccuracy = session.typedChars > 0
+      ? Math.min(100, Math.max(0,
+          Math.round((session.typedChars / (session.typedChars + session.backspaceCount)) * 100)
+        ))
+      : 0;
+
+    // ── AI Mood & Narrative (runs async, won't block response) ──
+    let mood = null;
+    let moodEmoji = "🧐";
+    let aiNarrative = null;
+
+    try {
+      const moodResult = await generateMoodAnalysis({
+        typingSpeed: session.typingSpeed,
+        backspaceCount: session.backspaceCount,
+        avgPauseTime: session.avgPauseTime,
+        fileSwitchCount: session.fileSwitchCount,
+        sessionTime: session.sessionTime,
+        saveCount: session.saveCount,
+        scrollCount: session.scrollCount,
+        accuracy: moodAccuracy,
+      });
+      mood = moodResult.mood;
+      moodEmoji = moodResult.emoji;
+
+      aiNarrative = await generateSessionNarrative({
+        wpm: Math.min(300, Math.max(0, Math.round((session.typingSpeed || 0) * 12))),
+        accuracy: moodAccuracy,
+        focusScore: Math.min(100, Math.max(0,
+          Math.round(100 - (session.fileSwitchCount * 5))
+        )),
+        clusterMeaning: CLUSTER_MAP[cluster]?.meaning ?? "Analyzed Coder",
+        mood,
+        dominantTrait: "Logic",
+        improvementArea: "Consistency",
+      });
+    } catch (aiErr) {
+      console.error("AI mood/narrative error (non-fatal):", aiErr.message);
+    }
+
     await MLResult.create({
       userId: session.userId,
       projectId: session.projectId,
       sessionId: session._id,
       cluster,
-      clusterMeaning: CLUSTER_MAP[cluster]?.meaning ?? "Analyzed Coder"
+      clusterMeaning: CLUSTER_MAP[cluster]?.meaning ?? "Analyzed Coder",
+      mood: mood?.mood || "Exploring",
+      aiNarrative,
     });
+
+    // ── Update streak ──────────────────────────────────
+    try {
+      const streakResult = await updateStreak(session.userId);
+      if (streakResult.milestone) {
+        const io = req.app.get("io");
+        if (io) {
+          io.to(String(session.userId)).emit("new_notification", {
+            type: "focus",
+            message: `🔥 ${streakResult.milestone}-Day Streak! You're on fire! Keep coding every day.`,
+          });
+        }
+      }
+    } catch (streakErr) {
+      console.error("Streak update error (non-fatal):", streakErr.message);
+    }
 
     // Generate notifications based on session activity
     const { checkAndCreateNotification } = require("../services/notification.service");
@@ -149,10 +213,20 @@ exports.endSession = async (req, res) => {
 
 exports.getDashboardSummary = async (req, res) => {
   try {
+    const query = { userId: req.user.userId };
 
-    const sessions = await Session.find({
-      userId: req.user.userId
-    }).sort({ createdAt: 1 });
+    // Filter by project type (dsa, ml, web, etc.) — groups ALL projects of that type
+    if (req.query.projectType) {
+      const Project = require("../models/Project.model");
+      const matchingProjects = await Project.find({ 
+        userId: req.user.userId, 
+        type: { $regex: new RegExp(`^${req.query.projectType}$`, 'i') }
+      });
+      const projectIds = matchingProjects.map(p => p._id);
+      query.projectId = { $in: projectIds };
+    }
+
+    const sessions = await Session.find(query).sort({ createdAt: 1 });
 
     const totalSessions = sessions.length;
 
@@ -189,7 +263,74 @@ exports.getDashboardSummary = async (req, res) => {
       });
     }
 
-    const latest = sessions[totalSessions - 1];
+    // Bug Fix: Filter out "ghost" sessions (e.g. editor left open with no typing)
+    const validSessions = sessions.filter(s => 
+      (s.typedChars > 5) || (s.backspaceCount > 2) || (s.fileSwitchCount > 2)
+    );
+    
+    // When viewing a specific project type, aggregate all sessions into averaged metrics
+    // When viewing "All Projects", show the latest session (real-time feel)
+    let latest;
+    if (req.query.projectType && validSessions.length > 1) {
+      // Aggregate all valid sessions for this project
+      const count = validSessions.length;
+      latest = {
+        typingSpeed: validSessions.reduce((sum, s) => sum + (s.typingSpeed || 0), 0) / count,
+        typedChars: validSessions.reduce((sum, s) => sum + (s.typedChars || 0), 0),
+        backspaceCount: validSessions.reduce((sum, s) => sum + (s.backspaceCount || 0), 0),
+        pasteCount: validSessions.reduce((sum, s) => sum + (s.pasteCount || 0), 0),
+        pasteCharacters: validSessions.reduce((sum, s) => sum + (s.pasteCharacters || 0), 0),
+        saveCount: validSessions.reduce((sum, s) => sum + (s.saveCount || 0), 0),
+        fileSwitchCount: Math.round(validSessions.reduce((sum, s) => sum + (s.fileSwitchCount || 0), 0) / count),
+        cursorMoveCount: Math.round(validSessions.reduce((sum, s) => sum + (s.cursorMoveCount || 0), 0) / count),
+        scrollCount: Math.round(validSessions.reduce((sum, s) => sum + (s.scrollCount || 0), 0) / count),
+        debugRunCount: validSessions.reduce((sum, s) => sum + (s.debugRunCount || 0), 0),
+        terminalOpenCount: validSessions.reduce((sum, s) => sum + (s.terminalOpenCount || 0), 0),
+        avgPauseTime: validSessions.reduce((sum, s) => sum + (s.avgPauseTime || 0), 0) / count,
+        sessionTime: Math.round(validSessions.reduce((sum, s) => sum + (s.sessionTime || 0), 0) / count),
+        suggestionsAccepted: validSessions.reduce((sum, s) => sum + (s.suggestionsAccepted || 0), 0),
+        postAcceptEdits: validSessions.reduce((sum, s) => sum + (s.postAcceptEdits || 0), 0),
+        _id: validSessions[validSessions.length - 1]._id, // use latest for ML lookup
+      };
+    } else {
+      // Pick the MOST RECENT valid session
+      latest = validSessions.length > 0 
+        ? validSessions[validSessions.length - 1] 
+        : sessions[totalSessions - 1]; // fallback
+    }
+
+    if (!latest) {
+      return res.json({
+        wpm: 0,
+        accuracy: 0,
+        pasteRatio: "0%",
+        duration: "0 sec",
+        backspaces: 0,
+        avgPauseTime: 0,
+        fileSwitches: 0,
+        saves: 0,
+        totalSessions: 0,
+        trend: [],
+        cluster: null,
+        clusterMeaning: "No Data",
+        confidence: 0,
+        activityTyping: 0,
+        activityDeletions: 0,
+        activityReviewing: 0,
+        activityIdle: 0,
+        behaviourCoding: 0,
+        behaviourDebugging: 0,
+        behaviourPlanning: 0,
+        focusScore: 0,
+        consistencyScore: 0,
+        memoryScore: 0,
+        keypressLatency: 0,
+        errorRate: "0%",
+        dominantTrait: "N/A",
+        improvementArea: "N/A",
+        totalTypedChars: 0
+      });
+    }
 
     const accuracy = latest.typedChars > 0
       ? Math.round((latest.typedChars / (latest.typedChars + latest.backspaceCount)) * 100)
@@ -213,23 +354,22 @@ exports.getDashboardSummary = async (req, res) => {
 
     const total = typingScore + deletionScore + reviewingScore + idleScore || 1;
 
-    // Focus Score: Calculated based on session length and distractions (file switches/idle time)
-    // If no session time or typed chars, focus is 0. Otherwise it starts at 100 and decreases.
+    // Focus Score: Less harsh penalty for file switches
     const focusScore = total > 0 
-      ? Math.min(100, Math.max(0, 100 - (latest.fileSwitchCount * 5) - ((idleScore / total) * 100)))
+      ? Math.min(100, Math.max(0, 100 - (latest.fileSwitchCount * 1.5) - ((idleScore / total) * 100)))
       : 0;
     
-    // Consistency: Proportional to typed characters vs pause time. 0 if no typing.
+    // Consistency: Less harsh penalty for pauses
     const consistencyScore = latest.typedChars > 0 
-      ? Math.min(100, Math.max(0, Math.round(100 - (latest.avgPauseTime * 5)))) 
+      ? Math.min(100, Math.max(0, Math.round(100 - (latest.avgPauseTime * 0.8)))) 
       : 0;
     
-    // Memory/Logic: Proportional to activity. No activity = 0.
+    // Memory/Logic: Adjusted scaling
     const memoryScore = latest.saveCount > 0 
-      ? Math.min(100, Math.max(0, 50 + (latest.saveCount * 10) - (latest.backspaceCount / 5))) 
+      ? Math.min(100, Math.max(0, 50 + (latest.saveCount * 5) - (latest.backspaceCount / 10))) 
       : 0;
     const logicScore = latest.cursorMoveCount > 0 
-      ? Math.min(100, Math.max(0, 40 + (latest.cursorMoveCount / 10) + (accuracy / 2))) 
+      ? Math.min(100, Math.max(0, 40 + (latest.cursorMoveCount / 20) + (accuracy / 2.5))) 
       : 0;
 
     // Bug Fix 7: Cap keypressLatency (prevent absurdly high values for slow sessions)
@@ -244,19 +384,34 @@ exports.getDashboardSummary = async (req, res) => {
     // Try finding ML result for the latest session first
     let ml = await MLResult.findOne({ sessionId: latest._id });
 
-    // Fallback: If latest session has no analysis, find the most recent analysis for this user
+    // Fallback: find most recent analysis, respecting project type filter if set
     if (!ml) {
-      ml = await MLResult.findOne({ userId: req.user.userId }).sort({ createdAt: -1 });
+      const mlQuery = { userId: req.user.userId };
+      if (req.query.projectType) {
+        const Project = require("../models/Project.model");
+        const typeProjects = await Project.find({ 
+          userId: req.user.userId, 
+          type: { $regex: new RegExp(`^${req.query.projectType}$`, 'i') }
+        });
+        mlQuery.projectId = { $in: typeProjects.map(p => p._id) };
+      }
+      ml = await MLResult.findOne(mlQuery).sort({ createdAt: -1 });
     }
 
-    const behaviour = ml && CLUSTER_MAP[ml.cluster]
-      ? CLUSTER_MAP[ml.cluster]
-      : { 
-          coding: 60, 
-          debugging: 25, 
-          planning: 15, 
-          meaning: ml ? "Analyzed Coder" : "Pending Analysis" 
-        };
+    // ── Data-driven behaviour distribution from REAL session metrics ──
+    const codingRaw = (latest.typedChars || 0) + (latest.saveCount || 0) * 10;
+    const debuggingRaw = ((latest.debugRunCount || 0) + (latest.terminalOpenCount || 0)) * 20;
+    const planningRaw = ((latest.fileSwitchCount || 0) * 3) + ((latest.scrollCount || 0) * 0.5) + ((latest.cursorMoveCount || 0) * 0.3);
+    const behaviourTotal = codingRaw + debuggingRaw + planningRaw || 1;
+
+    const behaviour = {
+      coding: Math.round((codingRaw / behaviourTotal) * 100),
+      debugging: Math.round((debuggingRaw / behaviourTotal) * 100),
+      planning: Math.round((planningRaw / behaviourTotal) * 100),
+      meaning: ml && CLUSTER_MAP[ml.cluster] ? CLUSTER_MAP[ml.cluster].meaning : (ml ? "Analyzed Coder" : "Pending Analysis")
+    };
+    // Ensure they sum to 100
+    behaviour.planning = 100 - behaviour.coding - behaviour.debugging;
 
     // Calculate Dominant Trait and Improvement Area
     const scores = [
@@ -326,12 +481,34 @@ exports.getDashboardSummary = async (req, res) => {
       comparisonNarrative = "This is your first session analysis. We'll start building your comparison profile from next session.";
     }
 
+    // ── Suggestion Tracker Scores ───────────────────────────────
+    // aiDependencyScore: how often user relies on AI suggestions
+    // We estimate "opportunities" as typedChars / 15 (avg suggestion length)
+    // Clamped to [0, 100] — never negative, never over 100
+    const suggOpportunities = Math.max(1, Math.round((latest.typedChars || 0) / 15));
+    const accepted = latest.suggestionsAccepted || 0;
+    const postEdits = latest.postAcceptEdits || 0;
+
+    const aiDependencyScore = Math.min(100, Math.max(0,
+      Math.round((accepted / suggOpportunities) * 100)
+    ));
+
+    // suggestionAccuracy: % of accepted suggestions that were kept as-is
+    // If no suggestions were accepted, we set it to null (not 0, to avoid misleading 0%)
+    const suggestionAccuracy = accepted > 0
+      ? Math.min(100, Math.max(0,
+          Math.round(((accepted - postEdits) / accepted) * 100)
+        ))
+      : null;
+
     res.json({
       // Bug Fix 1: Cap WPM at realistic max of 300
       wpm: Math.min(300, Math.max(0, Math.round(latest.typingSpeed * 12))),
       accuracy,
       pasteRatio,
-      duration: latest.sessionTime + " sec",
+      duration: req.query.projectType && validSessions.length > 1 
+        ? `${latest.sessionTime} sec (avg of ${validSessions.length} sessions)` 
+        : `${latest.sessionTime} sec`,
       backspaces: latest.backspaceCount,
       avgPauseTime: Number((latest.avgPauseTime ?? 0).toFixed(1)),
       fileSwitches: latest.fileSwitchCount,
@@ -360,11 +537,18 @@ exports.getDashboardSummary = async (req, res) => {
       dominantTrait,
       improvementArea,
       totalTypedChars: latest.typedChars || 0,
-      sessionNarrative,
+      // Use AI-generated narrative if available, else fall back to rule-based
+      sessionNarrative: ml?.aiNarrative || sessionNarrative,
       comparisonNarrative,
       scrollCount: latest.scrollCount || 0,
       terminalOpenCount: latest.terminalOpenCount || 0,
-      debugRunCount: latest.debugRunCount || 0
+      debugRunCount: latest.debugRunCount || 0,
+      // Mood (from AI)
+      mood: ml?.mood || null,
+      // Suggestion Tracker (all clamped to [0,100])
+      aiDependencyScore,
+      suggestionAccuracy,
+      suggestionsAccepted: accepted,
     });
 
   } catch (error) {

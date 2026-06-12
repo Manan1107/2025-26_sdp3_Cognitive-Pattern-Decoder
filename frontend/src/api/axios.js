@@ -1,5 +1,7 @@
 import axios from "axios";
 
+// 🔧 Switch to localhost for local testing:
+// baseURL: "http://localhost:8080/api"
 const instance = axios.create({
   baseURL: "https://cognitive-backend-2cs1.onrender.com/api",
 });
@@ -27,7 +29,7 @@ instance.interceptors.response.use(
         if (!refreshToken) throw new Error("No refresh token available");
 
         // Request a new token directly with axios to avoid loop
-        const res = await axios.post("https://cognitive-backend-2cs1.onrender.com/api/auth/refresh", {
+        const res = await axios.post(`${instance.defaults.baseURL}/auth/refresh`, {
           token: refreshToken,
         });
 
